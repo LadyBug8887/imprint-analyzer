@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const OpenAI = require("openai");
@@ -13,7 +15,9 @@ app.get("/", (req, res) => {
 app.post("/analyze", async (req, res) => {
   try {
     const user_text = (req.body.user_text || "").trim();
-    if (!user_text) return res.status(400).json({ error: "user_text is required" });
+    if (!user_text) {
+      return res.status(400).json({ error: "user_text is required" });
+    }
 
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({ error: "OPENAI_API_KEY missing in Render env vars" });
@@ -22,7 +26,6 @@ app.post("/analyze", async (req, res) => {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const system = `
-const system = `
 You are a STRICT JSON extraction engine for an identity/self-sabotage coaching app.
 Return ONLY valid JSON. No markdown. No extra keys. No advice.
 
@@ -62,20 +65,22 @@ Rules:
     });
 
     const raw = completion.choices?.[0]?.message?.content || "";
+
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return res.status(500).json({ error: "Model did not return JSON", raw });
+      return res.status(500).json({ error: "Model did not return valid JSON", raw });
     }
 
     return res.json(parsed);
+
   } catch (err) {
     return res.status(500).json({ error: "Server error", details: String(err) });
   }
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log("Running on port", PORT));
-
-
+app.listen(PORT, () => {
+  console.log("Running on port", PORT);
+});
