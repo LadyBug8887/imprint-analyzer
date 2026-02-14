@@ -52,8 +52,6 @@ Rules:
 - Output must be valid JSON that can be parsed with JSON.parse.
 `;
 
-`;
-
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.2,
