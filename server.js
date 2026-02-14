@@ -12,6 +12,25 @@ app.get("/", (req, res) => {
   res.send("WITHIN is live ✅");
 });
 
+// Extract the first JSON object found in a string (fallback safety)
+function extractFirstJsonObject(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const candidate = text.slice(start, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function shortenToMaxSentences(msg, max = 3) {
+  if (!msg || typeof msg !== "string") return "";
+  const parts = msg.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  return parts.slice(0, max).join(" ").trim();
+}
+
 app.post("/chat", async (req, res) => {
   try {
     const session_id = String(req.body.session_id || "").trim();
@@ -30,63 +49,61 @@ app.post("/chat", async (req, res) => {
     const SYSTEM = `
 You are WITHIN.
 
-WITHIN is a compassionate conversational coach that helps people identify what’s really driving their experience (often beneath awareness) by asking excellent questions.
+WITHIN is a compassionate conversational coach that reveals underlying patterns by asking excellent questions.
 
-Absolute rule: Keep replies SHORT so you can gather information.
+Absolute rule: Keep replies SHORT to gather info.
 You must respond in 1–3 sentences total, then ask exactly ONE question.
 
-Return ONLY valid JSON with EXACT keys:
+Return ONLY JSON that matches the required schema.
+
+Required keys:
 assistant_message
 follow_up_questions
 chakra_map
 map
 
-assistant_message rules:
+assistant_message:
 - 1 to 3 sentences total.
 - No lists. No long explanations. No advice.
-- Gently reflect what you heard and hint at a possible underlying driver in plain language.
-- Do not mention being an AI.
+- Gentle reflection + small hint at an underlying driver.
 
-follow_up_questions rules:
+follow_up_questions:
 - Array of exactly 1 question.
-- The question must be the best next question to clarify the root:
-  pick ONE focus per turn: origin, protection, trigger, or meaning.
 - Make it easy to answer.
 
-chakra_map rules:
+chakra_map:
 - Array of exactly 3 items.
-- Each item:
-  chakra: one of ["Root","Sacral","Solar Plexus","Heart","Throat","Third Eye","Crown"]
-  state: "blocked" or "overactive"
-  why: one short grounded sentence (no mystical language).
+- Each: chakra (Root/Sacral/Solar Plexus/Heart/Throat/Third Eye/Crown), state (blocked/overactive), why (one short grounded sentence).
+- Use grounded language (no mystical claims).
 
-map rules:
+map:
 - sabotage_archetype: one of ["Avoider","Perfectionist","Overdriver","Collapser","Pre-Rejector","None"]
-- sabotage_confidence: number 0 to 1
-- perceived_threat: array of 0–5 short keywords
-- limiting_belief: short sentence
+- sabotage_confidence: 0..1
+- perceived_threat: 0..5 keywords
+- limiting_belief: short
 - identity_belief: MUST start with exactly "I am someone who"
-- protection_intent: short sentence
+- protection_intent: short
 - recommended_protocol: one of ["Relief","Agency","Identity-Install","Behavior-Proof","Regulation"]
 
 Hard rules:
 - Do NOT output activation_level.
 - Do NOT output readiness.
 - Do NOT invent new archetypes.
-- If unclear, sabotage_archetype="None" and sabotage_confidence < 0.35.
-- Output must be parseable JSON only.
+- Output must be valid JSON only.
 `;
 
     const trimmedHistory = history
       .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-      .slice(-10);
+      .slice(-10)
+      .map(m => ({ role: m.role, content: m.content }));
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.25,
+      response_format: { type: "json_object" }, // ✅ forces JSON output
       messages: [
         { role: "system", content: SYSTEM },
-        ...trimmedHistory.map(m => ({ role: m.role, content: m.content })),
+        ...trimmedHistory,
         { role: "user", content: user_text }
       ]
     });
@@ -97,7 +114,11 @@ Hard rules:
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return res.status(500).json({ error: "Model did not return valid JSON", raw });
+      // Fallback: try extracting the JSON object from raw text
+      parsed = extractFirstJsonObject(raw);
+      if (!parsed) {
+        return res.status(500).json({ error: "Model did not return valid JSON", raw });
+      }
     }
 
     // Hard strip unwanted keys
@@ -115,13 +136,8 @@ Hard rules:
       parsed.follow_up_questions = ["When did you first start believing that?"];
     }
 
-    // Last-resort shortening if the model rambles
-    if (typeof parsed.assistant_message === "string") {
-      const s = parsed.assistant_message.trim();
-      // Keep only first 3 sentences max
-      const parts = s.split(/(?<=[.!?])\s+/).filter(Boolean);
-      parsed.assistant_message = parts.slice(0, 3).join(" ").trim();
-    }
+    // Enforce short assistant message
+    parsed.assistant_message = shortenToMaxSentences(parsed.assistant_message, 3);
 
     return res.json(parsed);
 
