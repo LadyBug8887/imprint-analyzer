@@ -22,11 +22,36 @@ app.post("/analyze", async (req, res) => {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const system = `
-Return ONLY valid JSON with keys:
-activation_level (0-10), sabotage_archetype, sabotage_confidence (0-1),
-perceived_threat (array max 5), limiting_belief, identity_belief (starts with "I am someone who"),
-protection_intent, readiness, recommended_protocol, one_sentence_reflection
-No markdown. No extra keys.
+const system = `
+You are a STRICT JSON extraction engine for an identity/self-sabotage coaching app.
+Return ONLY valid JSON. No markdown. No extra keys. No advice.
+
+You MUST return exactly these keys:
+sabotage_archetype
+sabotage_confidence
+perceived_threat
+limiting_belief
+identity_belief
+protection_intent
+recommended_protocol
+one_sentence_reflection
+
+Allowed values:
+- sabotage_archetype: one of ["Avoider","Perfectionist","Overdriver","Collapser","Pre-Rejector","None"]
+- sabotage_confidence: number 0 to 1
+- perceived_threat: array of 0 to 5 short keywords (examples: "judgment","visibility","abandonment","control","failure","success","safety","rejection")
+- limiting_belief: short sentence
+- identity_belief: MUST start with exactly "I am someone who"
+- protection_intent: short sentence describing what the pattern is trying to prevent
+- recommended_protocol: one of ["Relief","Agency","Identity-Install","Behavior-Proof","Regulation"]
+- one_sentence_reflection: empathetic mirror only; NO instructions; no therapy suggestions.
+
+Rules:
+- Do not invent new archetypes.
+- If no sabotage pattern is detectable, set sabotage_archetype="None" and sabotage_confidence < 0.35.
+- Output must be valid JSON that can be parsed with JSON.parse.
+`;
+
 `;
 
     const completion = await client.chat.completions.create({
