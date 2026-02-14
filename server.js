@@ -12,7 +12,6 @@ app.get("/", (req, res) => {
   res.send("WITHIN is live ✅");
 });
 
-// Fallback extractor (rarely needed if response_format works, but keeps you safe)
 function extractFirstJsonObject(text) {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -31,6 +30,29 @@ function shortenToMaxSentences(msg, max = 4) {
   return parts.slice(0, max).join(" ").trim();
 }
 
+function enforceBreathableSpacing(msg) {
+  if (!msg || typeof msg !== "string") return "";
+  let s = msg.trim().replace(/\n{3,}/g, "\n\n");
+  if (!s.includes("\n\n")) {
+    const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentences.length >= 3) {
+      s = `${sentences.slice(0, 2).join(" ")}\n\n${sentences.slice(2).join(" ")}`.trim();
+    }
+  }
+  return s;
+}
+
+// Detect if theta reset has already been used this session (based on history content)
+function thetaAlreadyUsed(history) {
+  if (!Array.isArray(history)) return false;
+  return history.some(m =>
+    m &&
+    m.role === "assistant" &&
+    typeof m.content === "string" &&
+    m.content.toLowerCase().includes("[theta-reset]")
+  );
+}
+
 app.post("/chat", async (req, res) => {
   try {
     const session_id = String(req.body.session_id || "").trim();
@@ -46,22 +68,42 @@ app.post("/chat", async (req, res) => {
 
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    const isThetaRequest =
+      user_text === "__THETA_RESET__" ||
+      /^\/theta\b/i.test(user_text) ||
+      user_text.toLowerCase().includes("theta reset");
+
+    const thetaUsed = thetaAlreadyUsed(history);
+
     const SYSTEM = `
 You are WITHIN.
 
-WITHIN is a warm, therapeutic, compassionate conversation that helps people uncover what’s really driving their experience and change it at the root—without overwhelming them.
+WITHIN feels like chatting with a super intelligent, warm, emotionally mature friend.
+Your job: help the user uncover blind spots, name the root pattern, and offer a practical reframe + tool to get unstuck.
 
-Non-negotiable behavior:
-- Keep responses SHORT so you can gather information over turns.
-- Always keep the conversation moving by asking ONE excellent next question every turn.
-- Give the user meaningful feedback when you identify a limiting belief or a useful insight.
+Voice:
+- Warm, grounded, direct
+- No coddling, no over-validating
+- No therapy-speak, no diagnosis
+- No “if you’re willing”
+- No mentioning you are an AI
 
-Safety + boundaries:
-- Do not diagnose.
-- Do not claim EMDR or perform therapy modalities.
-- You may offer gentle grounding prompts (optional language) like breath + noticing the body.
-- Do not mention being an AI.
-- Do not mention hotlines unless the user expresses intent to self-harm.
+Conversation style:
+- Keep it short and easy to read.
+- Always move the conversation forward with ONE great question.
+- When you spot a limiting belief/program, name it clearly.
+- Explain briefly: subconscious programs drive perception, emotion, and behavior—so changing the program changes the results.
+- Offer ONE small tool or reframe the user can apply now (no big lists).
+
+Very important restrictions:
+- Do NOT ask “where do you feel it in your body.”
+- Do NOT prompt breathing except inside the Theta Reset flow.
+- Theta Reset can be offered as an option, but only run it when the user explicitly requests it.
+
+Theta Reset rules:
+- Only provide ONE Theta Reset per session.
+- If the user requests another Theta Reset in the same session, acknowledge and offer a non-breath alternative (a cognitive reframe question).
+- Mark Theta Reset responses by including the tag [THETA-RESET] at the start of assistant_message.
 
 Output:
 Return ONLY valid JSON with EXACT keys:
@@ -70,35 +112,27 @@ follow_up_questions
 chakra_map
 map
 
-assistant_message rules (warm + short):
-- 2 to 4 sentences total (max 4).
-- Sound human and compassionate.
-- Reflect what you heard in a grounded way.
-- If you see a limiting belief, name it gently (e.g., “A belief showing up here is…”).
-- If you see a pattern, name it softly (e.g., “A protective pattern I’m noticing is…”).
-- No lists. No long explanations. No advice.
+assistant_message formatting:
+- Normal turns: 2–4 sentences max.
+- Use 1–2 short paragraphs with a blank line between (use \\n\\n).
+- No bullet lists.
 
-follow_up_questions rules:
+follow_up_questions:
 - Array of exactly 1 question.
-- The question must be the best next question to clarify the root.
-- Rotate the focus across turns: origin, trigger, protection, meaning, or body.
-- Somatic rule: If strong emotion/shame/fear/grief/anger is present or implied, prefer a body-based question.
-  Use wording like:
-  “If you’re willing, take a slow breath and notice: where do you feel that in your body right now?”
-  Keep it one question only.
+- The question should deepen root discovery (origin, trigger, protection, cost/benefit, or “what would change if…”).
 
-chakra_map rules:
-- Exactly 3 items.
-- Each item:
+chakra_map:
+- Keep it, but do NOT mention chakras in assistant_message unless user asks.
+- Exactly 3 items:
   chakra: one of ["Root","Sacral","Solar Plexus","Heart","Throat","Third Eye","Crown"]
   state: "blocked" or "overactive"
-  why: one short grounded sentence (psychological language, not mystical claims).
+  why: one grounded sentence (psychological, not mystical).
 
-map rules:
+map:
 - sabotage_archetype: one of ["Avoider","Perfectionist","Overdriver","Collapser","Pre-Rejector","None"]
-- sabotage_confidence: number 0 to 1
-- perceived_threat: array of 0–5 short keywords (examples: "rejection","judgment","failure","abandonment","control","visibility","safety","shame")
-- limiting_belief: short sentence (empty string if none)
+- sabotage_confidence: 0..1
+- perceived_threat: 0–5 keywords
+- limiting_belief: short sentence ("" if none)
 - identity_belief: MUST start with exactly "I am someone who"
 - protection_intent: short sentence
 - recommended_protocol: one of ["Relief","Agency","Identity-Install","Behavior-Proof","Regulation"]
@@ -107,8 +141,7 @@ Hard rules:
 - Do NOT output activation_level.
 - Do NOT output readiness.
 - Do NOT invent new archetypes.
-- If unclear, sabotage_archetype="None" and sabotage_confidence < 0.35.
-- Output must be valid JSON only (no preface text).
+- Output must be valid JSON only.
 `;
 
     const trimmedHistory = history
@@ -116,12 +149,54 @@ Hard rules:
       .slice(-10)
       .map(m => ({ role: m.role, content: m.content }));
 
+    // If theta requested and already used, we steer away from breath and give a short alternative.
+    if (isThetaRequest && thetaUsed) {
+      const data = {
+        assistant_message:
+          "You already did a Theta Reset this session, so let’s use a faster, non-breath lever.\n\nWhat’s the exact sentence your mind keeps repeating right before you spiral or shut down?",
+        follow_up_questions: [
+          "What’s the exact sentence your mind repeats right before you spiral or shut down?"
+        ],
+        chakra_map: [
+          { chakra: "Third Eye", state: "overactive", why: "Your mind is looping on interpretation and meaning-making." },
+          { chakra: "Heart", state: "blocked", why: "Self-acceptance feels gated by a condition being met." },
+          { chakra: "Solar Plexus", state: "blocked", why: "Confidence drops when the inner narrative turns critical." }
+        ],
+        map: {
+          sabotage_archetype: "None",
+          sabotage_confidence: 0.25,
+          perceived_threat: ["judgment", "rejection"],
+          limiting_belief: "",
+          identity_belief: "I am someone who wants clarity before moving forward.",
+          protection_intent: "To prevent making a move that could lead to regret or judgment.",
+          recommended_protocol: "Agency"
+        }
+      };
+      return res.json(data);
+    }
+
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.35,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM },
+
+        // Provide the model one extra instruction based on theta request
+        ...(isThetaRequest
+          ? [{
+              role: "system",
+              content: `
+Theta Reset requested.
+Create a short guided reset (about 60–90 seconds).
+Include ONE breath instruction max.
+No body-scanning.
+End by asking ONE question.
+Remember to start assistant_message with [THETA-RESET].
+`
+            }]
+          : []),
+
         ...trimmedHistory,
         { role: "user", content: user_text }
       ]
@@ -137,7 +212,7 @@ Hard rules:
       if (!parsed) return res.status(500).json({ error: "Model did not return valid JSON", raw });
     }
 
-    // Strip unwanted keys (just in case)
+    // Strip unwanted keys just in case
     if (parsed.map) {
       delete parsed.map.activation_level;
       delete parsed.map.readiness;
@@ -149,13 +224,22 @@ Hard rules:
     if (!Array.isArray(parsed.follow_up_questions)) parsed.follow_up_questions = [];
     parsed.follow_up_questions = parsed.follow_up_questions.slice(0, 1);
     if (parsed.follow_up_questions.length === 0) {
-      parsed.follow_up_questions = [
-        "If you’re willing, take a slow breath and notice: where do you feel that in your body right now?"
-      ];
+      parsed.follow_up_questions = ["What feels like the real problem underneath this?"];
     }
 
-    // Enforce short warm message
-    parsed.assistant_message = shortenToMaxSentences(parsed.assistant_message, 4);
+    // Enforce short + spaced
+    const isThetaResponse = typeof parsed.assistant_message === "string" &&
+      parsed.assistant_message.toUpperCase().includes("[THETA-RESET]");
+
+    // Normal turns must be very short; theta can be longer, but still readable
+    if (!isThetaResponse) {
+      parsed.assistant_message = enforceBreathableSpacing(
+        shortenToMaxSentences(parsed.assistant_message, 4)
+      );
+    } else {
+      // For theta: keep readable spacing, but allow a bit more length
+      parsed.assistant_message = enforceBreathableSpacing(parsed.assistant_message);
+    }
 
     return res.json(parsed);
 
@@ -164,7 +248,6 @@ Hard rules:
   }
 });
 
-// Deprecated
 app.post("/analyze", (req, res) => {
   return res.status(410).json({ error: "Use POST /chat instead." });
 });
