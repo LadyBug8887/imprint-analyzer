@@ -17,14 +17,10 @@ function extractFirstJsonObject(text) {
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return null;
   const candidate = text.slice(start, end + 1);
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(candidate); } catch { return null; }
 }
 
-function shortenToMaxSentences(msg, max = 4) {
+function shortenToMaxSentences(msg, max = 5) {
   if (!msg || typeof msg !== "string") return "";
   const parts = msg.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.slice(0, max).join(" ").trim();
@@ -42,15 +38,9 @@ function enforceBreathableSpacing(msg) {
   return s;
 }
 
-// Detect if theta reset has already been used this session (based on history content)
-function thetaAlreadyUsed(history) {
-  if (!Array.isArray(history)) return false;
-  return history.some(m =>
-    m &&
-    m.role === "assistant" &&
-    typeof m.content === "string" &&
-    m.content.toLowerCase().includes("[theta-reset]")
-  );
+function countUserTurns(history) {
+  if (!Array.isArray(history)) return 0;
+  return history.filter(m => m && m.role === "user" && typeof m.content === "string" && m.content.trim()).length;
 }
 
 app.post("/chat", async (req, res) => {
@@ -58,6 +48,7 @@ app.post("/chat", async (req, res) => {
     const session_id = String(req.body.session_id || "").trim();
     const user_text = String(req.body.user_text || "").trim();
     const history = Array.isArray(req.body.history) ? req.body.history : [];
+    const profile = (req.body.profile && typeof req.body.profile === "object") ? req.body.profile : {};
 
     if (!session_id) return res.status(400).json({ error: "session_id is required" });
     if (!user_text) return res.status(400).json({ error: "user_text is required" });
@@ -68,42 +59,51 @@ app.post("/chat", async (req, res) => {
 
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const isThetaRequest =
-      user_text === "__THETA_RESET__" ||
-      /^\/theta\b/i.test(user_text) ||
-      user_text.toLowerCase().includes("theta reset");
+    const isAssessmentRequest = user_text.trim().toLowerCase() === "/assessment";
 
-    const thetaUsed = thetaAlreadyUsed(history);
+    const userTurns = countUserTurns(history);
+    const assessmentReady = userTurns >= 4 && !isAssessmentRequest; // simple “enough info” heuristic
 
     const SYSTEM = `
-You are WITHIN.
+You are Lauren inside WITHIN.
 
-WITHIN feels like chatting with a super intelligent, warm, emotionally mature friend.
-Your job: help the user uncover blind spots, name the root pattern, and offer a practical reframe + tool to get unstuck.
+Identity:
+- Lauren is the user’s emotionally mature, intelligent bestie and support system.
+- She’s warm, grounded, direct, and insightful.
+- She helps the user work through issues, uncover blind spots, and map a path to create the reality they desire.
 
-Voice:
-- Warm, grounded, direct
-- No coddling, no over-validating
-- No therapy-speak, no diagnosis
-- No “if you’re willing”
-- No mentioning you are an AI
+Knowledge style:
+- You can reference ideas like: subconscious programming, self-image, trauma-informed patterns, self-sabotage mechanisms.
+- Do NOT name-drop authors as authority. Use the ideas naturally.
 
-Conversation style:
-- Keep it short and easy to read.
-- Always move the conversation forward with ONE great question.
-- When you spot a limiting belief/program, name it clearly.
-- Explain briefly: subconscious programs drive perception, emotion, and behavior—so changing the program changes the results.
-- Offer ONE small tool or reframe the user can apply now (no big lists).
+Tone rules:
+- Warm but not coddling.
+- No over-validating.
+- No therapy disclaimers.
+- No diagnosis.
+- No “if you’re willing”.
+- Do not mention you are an AI.
 
-Very important restrictions:
-- Do NOT ask “where do you feel it in your body.”
-- Do NOT prompt breathing except inside the Theta Reset flow.
-- Theta Reset can be offered as an option, but only run it when the user explicitly requests it.
+Conversation rules:
+- Keep it conversational and easy to read.
+- Always move forward with ONE selective question.
+- Ask smart branching questions like:
+  “Has this happened before or is it new?”
+  “Is this a pattern across your life or a one-time spike?”
+  “What tends to trigger it?”
+  “What is it trying to protect you from?”
+- Give the user feedback when you spot a limiting belief or a blind spot.
+- Offer ONE clear reframe or tool when appropriate (not a list).
 
-Theta Reset rules:
-- Only provide ONE Theta Reset per session.
-- If the user requests another Theta Reset in the same session, acknowledge and offer a non-breath alternative (a cognitive reframe question).
-- Mark Theta Reset responses by including the tag [THETA-RESET] at the start of assistant_message.
+Subconscious framing:
+- Briefly (one sentence max) remind the user that subconscious programs shape perception and choices, so changing the program changes outcomes.
+- Do not over-explain.
+
+Assessment flow:
+- Do not offer assessment immediately.
+- After enough info has been gathered, ask:
+  “Do you want an assessment (clear breakdown + plan), or keep chatting to go deeper?”
+- If user requests /assessment, deliver a clear breakdown and a simple plan.
 
 Output:
 Return ONLY valid JSON with EXACT keys:
@@ -111,22 +111,21 @@ assistant_message
 follow_up_questions
 chakra_map
 map
+show_assessment_button
+profile_update
 
-assistant_message formatting:
-- Normal turns: 2–4 sentences max.
-- Use 1–2 short paragraphs with a blank line between (use \\n\\n).
-- No bullet lists.
+assistant_message:
+- Normal chat: 2–5 sentences max.
+- Use 1–2 short paragraphs with a blank line (\\n\\n).
+- Assessment response: can be longer, but still spaced and readable (no walls of text).
+- No bullet lists in normal chat. (Assessment can use short labeled sections, but keep it clean.)
 
 follow_up_questions:
 - Array of exactly 1 question.
-- The question should deepen root discovery (origin, trigger, protection, cost/benefit, or “what would change if…”).
 
 chakra_map:
-- Keep it, but do NOT mention chakras in assistant_message unless user asks.
-- Exactly 3 items:
-  chakra: one of ["Root","Sacral","Solar Plexus","Heart","Throat","Third Eye","Crown"]
-  state: "blocked" or "overactive"
-  why: one grounded sentence (psychological, not mystical).
+- Exactly 3 items.
+- Do NOT mention chakras in assistant_message unless user asks.
 
 map:
 - sabotage_archetype: one of ["Avoider","Perfectionist","Overdriver","Collapser","Pre-Rejector","None"]
@@ -137,43 +136,23 @@ map:
 - protection_intent: short sentence
 - recommended_protocol: one of ["Relief","Agency","Identity-Install","Behavior-Proof","Regulation"]
 
+profile_update:
+- Update a simple profile object to help future messages:
+  { name, themes, common_triggers, recurring_beliefs, goals, patterns, notes }
+- Keep each value short. Never store sensitive identifying info.
+
 Hard rules:
 - Do NOT output activation_level.
 - Do NOT output readiness.
-- Do NOT invent new archetypes.
+- Do NOT ask body location questions.
+- Do NOT prompt breathing.
 - Output must be valid JSON only.
 `;
 
     const trimmedHistory = history
       .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-      .slice(-10)
+      .slice(-12)
       .map(m => ({ role: m.role, content: m.content }));
-
-    // If theta requested and already used, we steer away from breath and give a short alternative.
-    if (isThetaRequest && thetaUsed) {
-      const data = {
-        assistant_message:
-          "You already did a Theta Reset this session, so let’s use a faster, non-breath lever.\n\nWhat’s the exact sentence your mind keeps repeating right before you spiral or shut down?",
-        follow_up_questions: [
-          "What’s the exact sentence your mind repeats right before you spiral or shut down?"
-        ],
-        chakra_map: [
-          { chakra: "Third Eye", state: "overactive", why: "Your mind is looping on interpretation and meaning-making." },
-          { chakra: "Heart", state: "blocked", why: "Self-acceptance feels gated by a condition being met." },
-          { chakra: "Solar Plexus", state: "blocked", why: "Confidence drops when the inner narrative turns critical." }
-        ],
-        map: {
-          sabotage_archetype: "None",
-          sabotage_confidence: 0.25,
-          perceived_threat: ["judgment", "rejection"],
-          limiting_belief: "",
-          identity_belief: "I am someone who wants clarity before moving forward.",
-          protection_intent: "To prevent making a move that could lead to regret or judgment.",
-          recommended_protocol: "Agency"
-        }
-      };
-      return res.json(data);
-    }
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
@@ -181,22 +160,8 @@ Hard rules:
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM },
-
-        // Provide the model one extra instruction based on theta request
-        ...(isThetaRequest
-          ? [{
-              role: "system",
-              content: `
-Theta Reset requested.
-Create a short guided reset (about 60–90 seconds).
-Include ONE breath instruction max.
-No body-scanning.
-End by asking ONE question.
-Remember to start assistant_message with [THETA-RESET].
-`
-            }]
-          : []),
-
+        { role: "system", content: `Existing profile (if any): ${JSON.stringify(profile).slice(0, 1500)}` },
+        { role: "system", content: `Assessment context: isAssessmentRequest=${isAssessmentRequest}, assessmentReady=${assessmentReady}` },
         ...trimmedHistory,
         { role: "user", content: user_text }
       ]
@@ -212,7 +177,7 @@ Remember to start assistant_message with [THETA-RESET].
       if (!parsed) return res.status(500).json({ error: "Model did not return valid JSON", raw });
     }
 
-    // Strip unwanted keys just in case
+    // Strip unwanted keys
     if (parsed.map) {
       delete parsed.map.activation_level;
       delete parsed.map.readiness;
@@ -220,25 +185,28 @@ Remember to start assistant_message with [THETA-RESET].
     delete parsed.activation_level;
     delete parsed.readiness;
 
-    // Enforce exactly 1 follow-up question
+    // Enforce exactly 1 question
     if (!Array.isArray(parsed.follow_up_questions)) parsed.follow_up_questions = [];
     parsed.follow_up_questions = parsed.follow_up_questions.slice(0, 1);
     if (parsed.follow_up_questions.length === 0) {
-      parsed.follow_up_questions = ["What feels like the real problem underneath this?"];
+      parsed.follow_up_questions = ["Has this been a pattern in your life, or does it feel new?"];
     }
 
-    // Enforce short + spaced
-    const isThetaResponse = typeof parsed.assistant_message === "string" &&
-      parsed.assistant_message.toUpperCase().includes("[THETA-RESET]");
-
-    // Normal turns must be very short; theta can be longer, but still readable
-    if (!isThetaResponse) {
+    // Tighten normal replies (assessment can be longer)
+    if (!isAssessmentRequest) {
       parsed.assistant_message = enforceBreathableSpacing(
-        shortenToMaxSentences(parsed.assistant_message, 4)
+        shortenToMaxSentences(parsed.assistant_message, 5)
       );
     } else {
-      // For theta: keep readable spacing, but allow a bit more length
       parsed.assistant_message = enforceBreathableSpacing(parsed.assistant_message);
+    }
+
+    // Force assessment button behavior based on our heuristic
+    parsed.show_assessment_button = isAssessmentRequest ? false : assessmentReady;
+
+    // Ensure profile_update exists
+    if (!parsed.profile_update || typeof parsed.profile_update !== "object") {
+      parsed.profile_update = profile || {};
     }
 
     return res.json(parsed);
