@@ -28,16 +28,16 @@ function enforceBreathableSpacing(msg) {
   if (!msg || typeof msg !== "string") return "";
   let s = msg.trim().replace(/\n{3,}/g, "\n\n");
 
-  // Ensure short paragraphing (2 paragraphs max)
+  // Keep to 2 short paragraphs max
+  const paras = s.split(/\n\n+/).filter(Boolean);
+  if (paras.length > 2) s = paras.slice(0, 2).join("\n\n").trim();
+
+  // If no paragraph break, add one after ~2 sentences
   if (!s.includes("\n\n")) {
-    const parts = s.split(/(?<=[.!?])\s+/).filter(Boolean);
-    if (parts.length >= 3) {
-      s = `${parts.slice(0, 2).join(" ")}\n\n${parts.slice(2).join(" ")}`.trim();
+    const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentences.length >= 3) {
+      s = `${sentences.slice(0, 2).join(" ")}\n\n${sentences.slice(2).join(" ")}`.trim();
     }
-  } else {
-    // If too many paragraphs, compress
-    const paras = s.split(/\n\n+/).filter(Boolean);
-    s = paras.slice(0, 2).join("\n\n").trim();
   }
   return s;
 }
@@ -58,7 +58,7 @@ function sanitizeHistory(history) {
   return history
     .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .filter(m => m.content.trim() && m.content.trim() !== "…")
-    .slice(-10) // smaller = faster + less overwhelming
+    .slice(-10)
     .map(m => ({ role: m.role, content: m.content.trim() }));
 }
 
@@ -76,6 +76,18 @@ function extractLastQuestion(text) {
 
 function safeString(x) {
   return (typeof x === "string" ? x : "").trim();
+}
+
+function isVagueUserMessage(t) {
+  const s = (t || "").toLowerCase().trim();
+  if (!s) return true;
+  // Very short or generic states should trigger clarification first
+  if (s.length < 28) return true;
+  const vaguePhrases = [
+    "i don't know", "idk", "tired", "confused", "overwhelmed", "stressed",
+    "anxious", "sad", "upset", "i feel off", "i feel weird", "help"
+  ];
+  return vaguePhrases.some(p => s === p || s.includes(p));
 }
 
 /* -----------------------------
@@ -104,28 +116,36 @@ app.post("/chat", async (req, res) => {
     const userTurns = countUserTurns(history);
     const assessmentReady = userTurns >= 5 && !isAssessmentRequest;
 
+    const shouldClarifyFirst = !isAssessmentRequest && !isContinueRequest && isVagueUserMessage(user_text);
+
     const SYSTEM = `
 You are Lauren inside WITHIN.
 
 Vibe:
-- Human, intelligent, warm, emotionally mature. Confident and simple.
-- Not clinical. No therapy-speak. No lectures. No overwhelm.
+- Human, intelligent, emotionally mature. Warm, direct, calm.
+- Not clinical. No therapy-speak. No overwhelm.
 
 Hard rules:
-- Never ask the user to identify the root. You infer it gently.
+- Never ask the user to identify the root. You infer it gently later.
 - No body-location questions. No breathing prompts.
-- Give ONE insight + ONE small next step.
 - End assistant_message with exactly ONE thoughtful question.
+- Keep it light for the first 3–4 user turns.
 
-Chat mode format:
+Critical behavior:
+- DO NOT give advice or action steps until you understand context.
+- If the user is vague (e.g., “I’m tired and confused”, “I don’t know”), you must:
+  1) reflect briefly (1–2 sentences)
+  2) ask ONE clarifying question to gather the missing detail
+  3) do NOT recommend tasks, plans, or prioritizing yet
+
+Chat format:
 - 2 short paragraphs max (blank line between).
 - 3–5 sentences total.
-- First: reflect one concrete detail so the user feels seen.
-- Then: name the likely pattern underneath in plain language (not absolute).
-- Then: ONE simple reframe OR ONE tiny action.
-- End with ONE selective question that’s easy to answer.
-
-Keep it light in the first 3–4 user turns. You can name patterns, but gently.
+- Ask ONE high-quality clarifying question that makes it easy to answer.
+Examples:
+- “Is the tiredness more physical, emotional, or mental today?”
+- “What happened right before you started feeling this way?”
+- “What’s the main thing your mind keeps circling around?”
 
 Assessment:
 - When assessmentReady=true, include this exact line as its own paragraph at the very end:
@@ -148,6 +168,10 @@ follow_up_questions:
 No extra keys. JSON only.
 `;
 
+    const CLARIFY_SYS = shouldClarifyFirst
+      ? "User is vague. You MUST ask a clarifying question first. Do NOT give advice or suggest actions in this turn."
+      : "";
+
     const CONTINUE_SYS = isContinueRequest
       ? "Continue seamlessly from the existing conversation. Do NOT ask the user to recap. Keep your reply short and end with one thoughtful question."
       : "";
@@ -157,13 +181,13 @@ No extra keys. JSON only.
       temperature: 0.45,
       presence_penalty: 0.15,
       frequency_penalty: 0.10,
-      // keep responses shorter/faster
-      max_tokens: 220,
+      max_tokens: 210,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM },
         { role: "system", content: `Existing profile: ${JSON.stringify(profile).slice(0, 1200)}` },
         { role: "system", content: `assessmentReady=${assessmentReady}, isAssessmentRequest=${isAssessmentRequest}` },
+        ...(CLARIFY_SYS ? [{ role: "system", content: CLARIFY_SYS }] : []),
         ...(CONTINUE_SYS ? [{ role: "system", content: CONTINUE_SYS }] : []),
         ...history,
         { role: "user", content: user_text }
@@ -185,12 +209,15 @@ No extra keys. JSON only.
     if (!parsed.map || typeof parsed.map !== "object") parsed.map = {};
 
     // Enforce exactly 1 follow-up question
-    parsed.follow_up_questions = parsed.follow_up_questions.slice(0, 1);
+    parsed.follow_up_questions = Array.isArray(parsed.follow_up_questions)
+      ? parsed.follow_up_questions.slice(0, 1)
+      : [];
+
     if (parsed.follow_up_questions.length === 0) {
-      parsed.follow_up_questions = ["Is this a pattern for you, or more of a one-time spike?"];
+      parsed.follow_up_questions = ["What happened right before you started feeling this way?"];
     }
 
-    // Clamp/spacing (shorter)
+    // Clamp/spacing
     if (!isAssessmentRequest) {
       parsed.assistant_message = enforceBreathableSpacing(
         clampSentences(parsed.assistant_message, 5)
@@ -200,17 +227,15 @@ No extra keys. JSON only.
     }
 
     // Force assistant_message to end with the same question
-    const q = safeString(parsed.follow_up_questions[0]) || "Is this a pattern for you, or more of a one-time spike?";
+    const q = safeString(parsed.follow_up_questions[0]) || "What happened right before you started feeling this way?";
     parsed.assistant_message = ensureEndsWithQuestion(parsed.assistant_message, q);
 
     // Ensure follow_up_questions matches the last question
     const lastQ = extractLastQuestion(parsed.assistant_message);
     if (lastQ) parsed.follow_up_questions[0] = lastQ;
 
-    // Assessment button visibility
     parsed.show_assessment_button = isAssessmentRequest ? false : assessmentReady;
 
-    // Profile update fallback
     if (!parsed.profile_update || typeof parsed.profile_update !== "object") {
       parsed.profile_update = profile || {};
     }
@@ -222,11 +247,9 @@ No extra keys. JSON only.
   }
 });
 
-// Legacy endpoint
 app.post("/analyze", (req, res) => {
   return res.status(410).json({ error: "Use POST /chat instead." });
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log("Running on port", PORT));
-
