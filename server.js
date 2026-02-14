@@ -27,16 +27,22 @@ function extractFirstJsonObject(text) {
 function enforceBreathableSpacing(msg) {
   if (!msg || typeof msg !== "string") return "";
   let s = msg.trim().replace(/\n{3,}/g, "\n\n");
+
+  // Ensure short paragraphing (2 paragraphs max)
   if (!s.includes("\n\n")) {
-    const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
-    if (sentences.length >= 3) {
-      s = `${sentences.slice(0, 2).join(" ")}\n\n${sentences.slice(2).join(" ")}`.trim();
+    const parts = s.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (parts.length >= 3) {
+      s = `${parts.slice(0, 2).join(" ")}\n\n${parts.slice(2).join(" ")}`.trim();
     }
+  } else {
+    // If too many paragraphs, compress
+    const paras = s.split(/\n\n+/).filter(Boolean);
+    s = paras.slice(0, 2).join("\n\n").trim();
   }
   return s;
 }
 
-function clampSentences(msg, max = 8) {
+function clampSentences(msg, max = 5) {
   if (!msg || typeof msg !== "string") return "";
   const parts = msg.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.slice(0, max).join(" ").trim();
@@ -52,7 +58,7 @@ function sanitizeHistory(history) {
   return history
     .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .filter(m => m.content.trim() && m.content.trim() !== "…")
-    .slice(-14)
+    .slice(-10) // smaller = faster + less overwhelming
     .map(m => ({ role: m.role, content: m.content.trim() }));
 }
 
@@ -101,34 +107,33 @@ app.post("/chat", async (req, res) => {
     const SYSTEM = `
 You are Lauren inside WITHIN.
 
-Voice:
-- Smart, emotionally mature, warm, confident. Human. Not clinical.
-- No therapy-speak, no lectures, no disclaimers, no coddling.
-- You lead the conversation.
+Vibe:
+- Human, intelligent, warm, emotionally mature. Confident and simple.
+- Not clinical. No therapy-speak. No lectures. No overwhelm.
 
-Non-negotiables:
-- Never ask the user to identify the root. You infer it.
-- Never ask body-location questions.
-- Never instruct breathing.
-- Always end assistant_message with exactly ONE thoughtful question.
+Hard rules:
+- Never ask the user to identify the root. You infer it gently.
+- No body-location questions. No breathing prompts.
+- Give ONE insight + ONE small next step.
+- End assistant_message with exactly ONE thoughtful question.
 
-Chat Mode:
-- 2–3 short paragraphs separated by blank lines.
-- 4–8 sentences max.
-- First line: reflect one concrete detail.
-- Then: name the likely pattern underneath (confident but not absolute).
-- Then: give ONE reframe or ONE tool only.
-- Include ONE micro-prediction if helpful.
-- End with ONE selective forward-moving question.
+Chat mode format:
+- 2 short paragraphs max (blank line between).
+- 3–5 sentences total.
+- First: reflect one concrete detail so the user feels seen.
+- Then: name the likely pattern underneath in plain language (not absolute).
+- Then: ONE simple reframe OR ONE tiny action.
+- End with ONE selective question that’s easy to answer.
 
-Assessment Flow:
-- Do NOT offer assessment immediately.
-- When assessmentReady=true, include:
+Keep it light in the first 3–4 user turns. You can name patterns, but gently.
+
+Assessment:
+- When assessmentReady=true, include this exact line as its own paragraph at the very end:
   “Do you want an Assessment (clear breakdown + plan), or keep chatting to go deeper?”
-- If user sends /assessment, use structured labeled sections.
+- If user sends /assessment: use short labeled sections, 1–2 sentences each, separated by blank lines.
 
-Output format:
-Return ONLY valid JSON with keys:
+Output:
+Return ONLY valid JSON with EXACT keys:
 assistant_message
 follow_up_questions
 chakra_map
@@ -140,25 +145,26 @@ follow_up_questions:
 - Exactly 1 question.
 - Must match the final question in assistant_message.
 
-Hard rules:
-- Output must be parseable JSON only.
+No extra keys. JSON only.
 `;
 
     const CONTINUE_SYS = isContinueRequest
-      ? "User asked you to continue seamlessly from the existing conversation. Do NOT ask them to recap. Continue your previous reasoning and end with one thoughtful question."
+      ? "Continue seamlessly from the existing conversation. Do NOT ask the user to recap. Keep your reply short and end with one thoughtful question."
       : "";
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.55,
-      presence_penalty: 0.25,
-      frequency_penalty: 0.15,
+      temperature: 0.45,
+      presence_penalty: 0.15,
+      frequency_penalty: 0.10,
+      // keep responses shorter/faster
+      max_tokens: 220,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM },
-        { role: "system", content: `Existing profile: ${JSON.stringify(profile).slice(0, 1500)}` },
+        { role: "system", content: `Existing profile: ${JSON.stringify(profile).slice(0, 1200)}` },
         { role: "system", content: `assessmentReady=${assessmentReady}, isAssessmentRequest=${isAssessmentRequest}` },
-        { role: "system", content: CONTINUE_SYS },
+        ...(CONTINUE_SYS ? [{ role: "system", content: CONTINUE_SYS }] : []),
         ...history,
         { role: "user", content: user_text }
       ]
@@ -178,23 +184,33 @@ Hard rules:
     if (!Array.isArray(parsed.follow_up_questions)) parsed.follow_up_questions = [];
     if (!parsed.map || typeof parsed.map !== "object") parsed.map = {};
 
+    // Enforce exactly 1 follow-up question
     parsed.follow_up_questions = parsed.follow_up_questions.slice(0, 1);
     if (parsed.follow_up_questions.length === 0) {
-      parsed.follow_up_questions = ["Has this happened before, or does it feel new?"];
+      parsed.follow_up_questions = ["Is this a pattern for you, or more of a one-time spike?"];
     }
 
-    const q = safeString(parsed.follow_up_questions[0]) || "Has this happened before, or does it feel new?";
+    // Clamp/spacing (shorter)
+    if (!isAssessmentRequest) {
+      parsed.assistant_message = enforceBreathableSpacing(
+        clampSentences(parsed.assistant_message, 5)
+      );
+    } else {
+      parsed.assistant_message = enforceBreathableSpacing(parsed.assistant_message).slice(0, 2200);
+    }
+
+    // Force assistant_message to end with the same question
+    const q = safeString(parsed.follow_up_questions[0]) || "Is this a pattern for you, or more of a one-time spike?";
     parsed.assistant_message = ensureEndsWithQuestion(parsed.assistant_message, q);
 
+    // Ensure follow_up_questions matches the last question
     const lastQ = extractLastQuestion(parsed.assistant_message);
     if (lastQ) parsed.follow_up_questions[0] = lastQ;
 
-    parsed.assistant_message = enforceBreathableSpacing(
-      clampSentences(parsed.assistant_message, 8)
-    );
-
+    // Assessment button visibility
     parsed.show_assessment_button = isAssessmentRequest ? false : assessmentReady;
 
+    // Profile update fallback
     if (!parsed.profile_update || typeof parsed.profile_update !== "object") {
       parsed.profile_update = profile || {};
     }
@@ -206,9 +222,11 @@ Hard rules:
   }
 });
 
+// Legacy endpoint
 app.post("/analyze", (req, res) => {
   return res.status(410).json({ error: "Use POST /chat instead." });
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log("Running on port", PORT));
+
