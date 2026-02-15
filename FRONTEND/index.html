@@ -215,31 +215,29 @@ body{
 
 .bubble{
   max-width:78%;
-  padding:11px 13px;
+  padding:11px 14px;
   border-radius:20px;
   font-size:15px;
-  line-height:1.45;
+  line-height:1.35;
   white-space:pre-wrap;
+  display:inline-block;
+  text-align:center;
 }
+
 
 /* ✅ Center user text in blue bubble */
 .bubble.user{
   background:var(--blue);
   color:#fff;
   border-bottom-right-radius:8px;
-
-  text-align:left;
-
-  /* iMessage optical padding (extra right padding) */
-  padding:11px 18px 11px 14px;
 }
-
 
 .bubble.assistant{
   background:var(--incoming);
   color:#000;
   border-bottom-left-radius:8px;
 }
+
 
 /* Composer */
 .composer{
