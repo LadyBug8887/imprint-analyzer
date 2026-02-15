@@ -225,11 +225,12 @@ body{
   background:var(--blue);
   color:#fff;
   border-bottom-right-radius:8px;
-  text-align:left;
-  padding:12px 16px;
-  display:inline-block;
-}
 
+  text-align:left;
+
+  /* iMessage optical padding (extra right padding) */
+  padding:11px 18px 11px 14px;
+}
 
 
 .bubble.assistant{
@@ -278,14 +279,7 @@ body{
 
 /* Typing */
 .typing{ color:#111; font-size:15px; }
-.dots::after{
-  content:"...";
-  display:inline-block;
-  width:1.2em;
-  overflow:hidden;
-  animation:dots 1s steps(4,end) infinite;
-}
-@keyframes dots{ from{ width:0; } to{ width:1.2em; } }
+
 
 /* Starter box */
 .starter-wrap{
@@ -439,10 +433,13 @@ function render(){
     bubble.className="bubble "+msg.role;
 
     if(msg.typing){
-      bubble.innerHTML='<span class="typing">typing<span class="dots"></span></span>';
-    }else{
-      bubble.textContent=msg.content;
-    }
+  bubble.textContent = "Typing…";
+  bubble.classList.add("typing");
+} else {
+  bubble.textContent = msg.content;
+  bubble.classList.remove("typing");
+}
+
 
     stack.appendChild(bubble);
     row.appendChild(stack);
