@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WITHIN</title>
+
+<style>
+:root{
+  --ios-font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --border:#e5e5ea;
+  --blue:#0a84ff;
+  --incoming:#e9e9eb;
+  --shadow:0 10px 28px rgba(0,0,0,.08);
+
+  /* lighter iMessage header grey */
+  --ios-header: rgba(250,250,252,0.92);
+  --ios-header-line: rgba(229,229,234,0.85);
+}
+
+*{ box-sizing:border-box; }
+
+body{
+  margin:0;
+  background:#fff;
+  font-family:var(--ios-font);
+  color:#111;
+}
+
+.within-wrap{
+  max-width:760px;
+  margin:40px auto;
+  padding:0 12px;
+}
+
+/* Detached logo box */
+.logo-card{
+  border:1px solid #ddd;
+  border-radius:18px;
+  background:#fff;
+  box-shadow:var(--shadow);
+  padding:18px 16px 16px 16px;
+  margin-bottom:16px;
+  position:relative;
+}
+
+/* Start Over in logo box */
+.reset-btn{
+  position:absolute;
+  top:16px;
+  right:16px;
+  background:none;
+  border:none;
+  font-size:13px;
+  font-family:var(--ios-font);
+  color:var(--blue);
+  cursor:pointer;
+}
+
+/* Logo lockup */
+.logo-lockup{ display:inline-block; }
+.within-sub{
+  display:block;
+  text-transform:lowercase;
+  letter-spacing:.18em;
+  font-weight:500;
+  opacity:.7;
+  margin:0;
+  line-height:1.05;
+  font-size:12px;
+  white-space:nowrap;
+}
+.within-title{
+  display:block;
+  font-size:18px;
+  letter-spacing:.14em;
+  font-weight:700;
+  margin:2px 0 14px 0;
+  line-height:1.05;
+  white-space:nowrap;
+}
+.logo-description{
+  font-size:15px;
+  line-height:1.45;
+  margin:0;
+}
+
+/* Main chat card */
+.within-card{
+  border:1px solid #ddd;
+  border-radius:18px;
+  background:#fff;
+  overflow:hidden;
+  box-shadow:var(--shadow);
+}
+
+/* Chat log */
+.chatlog{
+  height:480px;
+  overflow:auto;
+  padding:12px 14px;
+  padding-top:74px; /* space for sticky header + a little breathing room */
+  background:#fff;
+  position:relative;
+}
+
+/* iMessage contact bar */
+.chat-header{
+  position:sticky;
+  top:0;
+  z-index:20;
+}
+
+/* This fills the "white space above Lauren" too */
+.chat-header .bar{
+  height:62px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  position:relative;
+
+  background:var(--ios-header);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+
+  border-bottom:1px solid var(--ios-header-line);
+}
+
+/* Left back chevron */
+.back-btn{
+  position:absolute;
+  left:10px;
+  top:50%;
+  transform:translateY(-50%);
+  display:flex;
+  align-items:center;
+  gap:6px;
+  border:0;
+  background:none;
+  padding:8px 8px;
+  cursor:pointer;
+  color:var(--blue);
+  font-family:var(--ios-font);
+  font-size:14px;
+  line-height:1;
+}
+.back-btn svg{ display:block; }
+
+/* Right FaceTime icon */
+.facetime-btn{
+  position:absolute;
+  right:10px;
+  top:50%;
+  transform:translateY(-50%);
+  width:38px;
+  height:38px;
+  border-radius:10px;
+  border:0;
+  background:none;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--blue);
+}
+.facetime-btn svg{ display:block; }
+
+.contact-name{
+  font-weight:600;
+  font-size:16px;
+  letter-spacing:.01em;
+}
+
+/* Chat rows */
+.row{
+  display:flex;
+  align-items:flex-end;
+  gap:10px;
+  margin:12px 0;
+}
+.row.user{ justify-content:flex-end; }
+.row.assistant{ justify-content:flex-start; }
+
+/* Premium avatar */
+.avatar{
+  width:32px;
+  height:32px;
+  border-radius:50%;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255,255,255,.45), transparent 42%),
+    linear-gradient(145deg, #b5b5b9, #8e8e93);
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.45),
+    0 1px 2px rgba(0,0,0,.08);
+  color:#fff;
+  font-size:14px;
+  font-weight:600;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  user-select:none;
+}
+
+.stack{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.stack.user{ align-items:flex-end; }
+.stack.assistant{ align-items:flex-start; }
+
+.bubble{
+  max-width:78%;
+  padding:11px 13px;
+  border-radius:20px;
+  font-size:15px;
+  line-height:1.45;
+  white-space:pre-wrap;
+}
+.bubble.user{
+  background:var(--blue);
+  color:#fff;
+  border-bottom-right-radius:8px;
+}
+.bubble.assistant{
+  background:var(--incoming);
+  color:#000;
+  border-bottom-left-radius:8px;
+}
+
+/* Composer */
+.composer{
+  display:flex;
+  gap:10px;
+  padding:12px;
+  border-top:1px solid #eee;
+  background:#fff;
+  align-items:flex-end;
+}
+.input{
+  flex:1;
+  resize:none;
+  padding:10px 12px;
+  border-radius:18px;
+  border:1px solid #d1d1d6;
+  font-size:15px;
+  font-family:var(--ios-font);
+  outline:none;
+}
+.input:focus{
+  border-color:rgba(10,132,255,.35);
+  box-shadow:0 0 0 3px rgba(10,132,255,.12);
+}
+.sendbtn{
+  width:40px;
+  height:40px;
+  border-radius:50%;
+  border:0;
+  background:var(--blue);
+  color:#fff;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+/* Typing */
+.typing{ color:#111; font-size:15px; }
+.dots::after{
+  content:"...";
+  display:inline-block;
+  width:1.2em;
+  overflow:hidden;
+  animation:dots 1s steps(4,end) infinite;
+}
+@keyframes dots{ from{ width:0; } to{ width:1.2em; } }
+
+/* Starter box */
+.starter-wrap{
+  margin-top:16px;
+  background:#fff;
+  border:1px solid #ddd;
+  border-radius:18px;
+  box-shadow:var(--shadow);
+  padding:14px;
+}
+.starter-title{
+  font-size:14px;
+  opacity:.75;
+  margin-bottom:12px;
+}
+.starter-buttons{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+}
+.starter-btn{
+  border:1px solid #d1d1d6;
+  background:#f2f2f7;
+  padding:10px 12px;
+  border-radius:999px;
+  cursor:pointer;
+  font-size:13px;
+  font-family:var(--ios-font);
+}
+.starter-btn:hover{ background:#e9e9ef; }
+</style>
+</head>
+
+<body>
+<div class="within-wrap">
+
+  <div class="logo-card">
+    <button class="reset-btn" id="resetBtn">Start Over</button>
+    <div class="logo-lockup">
+      <div class="within-sub" id="withinSub">change begins</div>
+      <div class="within-title" id="withinTitle">WITHIN</div>
+    </div>
+    <p class="logo-description">Chat with Lauren to untangle what you’re feeling and turn it into clarity and momentum.</p>
+  </div>
+
+  <div class="within-card">
+    <div id="chatLog" class="chatlog">
+      <div class="chat-header">
+        <div class="bar">
+          <!-- iPhone blue back chevron -->
+          <button class="back-btn" type="button" aria-label="Back">
+            <svg width="14" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15.5 19.5L8 12l7.5-7.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+
+          <div class="contact-name">Lauren</div>
+
+          <!-- FaceTime icon (blue outline) -->
+          <button class="facetime-btn" type="button" aria-label="FaceTime">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3.5" y="6.5" width="12" height="11" rx="2.6" stroke="currentColor" stroke-width="2"/>
+              <path d="M15.8 10.2l4.2-2.4v8.4l-4.2-2.4v-3.6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <textarea id="userText" rows="2" class="input" placeholder="Text Lauren…"></textarea>
+      <button id="sendBtn" class="sendbtn" aria-label="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M22 2L11 13" stroke="white" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="starter-wrap">
+    <div class="starter-title">Not sure where to start? Try one of these...</div>
+    <div class="starter-buttons" id="starterButtons">
+      <button class="starter-btn" data-prompt="Something feels off and I can’t quite name it.">Something feels off</button>
+      <button class="starter-btn" data-prompt="I feel stuck and I don’t understand why.">I feel stuck</button>
+      <button class="starter-btn" data-prompt="I’m spiraling and I need help slowing this down.">I’m spiraling</button>
+      <button class="starter-btn" data-prompt="This keeps repeating and I want to understand the pattern.">This keeps repeating</button>
+      <button class="starter-btn" data-prompt="My confidence feels shaky and I don’t know what shifted.">My confidence feels shaky</button>
+      <button class="starter-btn" data-prompt="I need clarity on what’s really going on beneath this.">I need clarity</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const CHAT_URL="https://imprint-analyzer.onrender.com/chat";
+const historyKey="within_history_v32";
+const introKey="within_intro_v32";
+const sessionKey="within_session_v32";
+let history=JSON.parse(localStorage.getItem(historyKey)||"[]");
+
+/* Ensure intro ALWAYS shows on a fresh reset */
+function showIntro(force=false){
+  if(force){
+    localStorage.removeItem(introKey);
+  }
+  if(history.length===0 && !localStorage.getItem(introKey)){
+    localStorage.setItem(introKey,"yes");
+    addMessage("assistant","Hi, I'm Lauren.\n\nYour emotionally intelligent bestie who will uncover your blind spots and help you work through whatever you’re facing.\n\nWhat’s on your mind?");
+  }
+}
+
+function getSessionId(){
+  let sid=localStorage.getItem(sessionKey);
+  if(!sid){sid=(crypto?.randomUUID?.() || ("sid_"+Math.random().toString(16).slice(2)+Date.now().toString(16)));localStorage.setItem(sessionKey,sid);}
+  return sid;
+}
+function saveHistory(){localStorage.setItem(historyKey,JSON.stringify(history));}
+
+function addMessage(role,content,typing=false){
+  history.push({role,content,typing});
+  saveHistory();render();return history.length-1;
+}
+function removeMessage(i){history.splice(i,1);saveHistory();render();}
+
+function render(){
+  const log=document.getElementById("chatLog");
+  const header=log.querySelector(".chat-header");
+  log.innerHTML="";
+  log.appendChild(header);
+
+  history.forEach(msg=>{
+    const row=document.createElement("div");
+    row.className="row "+msg.role;
+
+    if(msg.role==="assistant"){
+      const avatar=document.createElement("div");
+      avatar.className="avatar";
+      avatar.textContent="L";
+      row.appendChild(avatar);
+    }
+
+    const stack=document.createElement("div");
+    stack.className="stack "+msg.role;
+
+    const bubble=document.createElement("div");
+    bubble.className="bubble "+msg.role;
+
+    if(msg.typing){
+      bubble.innerHTML='<span class="typing">typing<span class="dots"></span></span>';
+    }else{
+      bubble.textContent=msg.content;
+    }
+
+    stack.appendChild(bubble);
+    row.appendChild(stack);
+    log.appendChild(row);
+  });
+
+  log.scrollTop=log.scrollHeight;
+}
+
+async function send(text){
+  const t=String(text||"").trim();
+  if(!t) return;
+
+  addMessage("user",t);
+  const typingIndex=addMessage("assistant","",true);
+
+  try{
+    const res=await fetch(CHAT_URL,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        session_id:getSessionId(),
+        user_text:t,
+        history:history.filter(m=>!m.typing).map(m=>({role:m.role,content:m.content}))
+      })
+    });
+
+    const data=await res.json();
+    removeMessage(typingIndex);
+    addMessage("assistant", data.assistant_message || "I’m here.\n\nWhat set this off today?");
+  }catch(e){
+    removeMessage(typingIndex);
+    addMessage("assistant","Something glitched — can you send that again?");
+  }
+}
+
+document.getElementById("sendBtn").onclick=()=>{
+  const input=document.getElementById("userText");
+  const text=input.value;
+  input.value="";
+  send(text);
+};
+
+document.getElementById("userText").addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&!e.shiftKey){
+    e.preventDefault();
+    document.getElementById("sendBtn").click();
+  }
+});
+
+document.getElementById("starterButtons").addEventListener("click",e=>{
+  const btn=e.target.closest("button[data-prompt]");
+  if(btn) send(btn.dataset.prompt);
+});
+
+document.getElementById("resetBtn").onclick=()=>{
+  localStorage.removeItem(historyKey);
+  localStorage.removeItem(introKey);
+  localStorage.removeItem(sessionKey);
+  history=[];
+  render();
+  showIntro(true); /* ✅ forces intro back */
+};
+
+render();
+showIntro();
+
+/* optional: make the back and facetime buttons non-functional placeholders */
+document.querySelector(".back-btn").onclick = ()=>{};
+document.querySelector(".facetime-btn").onclick = ()=>{};
+</script>
+
+</body>
+</html>
