@@ -88,9 +88,32 @@ app.post("/chat", async (req, res) => {
   const started = Date.now();
 
   try {
-    const session_id = String(req.body.session_id || "").trim();
-    const user_text = String(req.body.user_text || "").trim();
-    const history = sanitizeHistory(req.body.history);
+   const session_id = String(req.body.session_id || "").trim();
+const user_text = String(req.body.user_text || "").trim();
+const history = sanitizeHistory(req.body.history);
+
+let processed_text = user_text;
+
+// Only interpret number selections at the very beginning
+const userTurnCount = history.filter(m => m.role === "user").length;
+const isBeginning = userTurnCount === 0;
+
+if (isBeginning) {
+  if (user_text === "1") {
+    processed_text = "I want to work on uncovering a limiting belief shaping my behavior.";
+  } else if (user_text === "2") {
+    processed_text = "I want to explore what is really holding me back right now.";
+  } else if (user_text === "3") {
+    processed_text = "I want to work through a relationship dynamic that keeps repeating.";
+  } else if (user_text === "4") {
+    processed_text = "I want to strengthen my self-confidence and self-image.";
+  } else if (user_text === "5") {
+    processed_text = "I want to understand my emotional patterns better.";
+  } else if (user_text === "6") {
+    processed_text = "I want to talk about what is going on in my life right now.";
+  }
+}
+
 
     if (!session_id) return res.status(400).json({ error: "session_id is required" });
     if (!user_text) return res.status(400).json({ error: "user_text is required" });
@@ -140,7 +163,8 @@ assistant_message, follow_up_questions, chakra_map, map, show_assessment_button,
           { role: "system", content: "Return valid json only. json." },
           { role: "system", content: SYSTEM },
           ...history,
-          { role: "user", content: user_text }
+          { role: "user", content: processed_text }
+
         ]
       });
     }, 2);
