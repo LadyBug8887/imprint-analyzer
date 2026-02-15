@@ -10,70 +10,107 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (req, res) => res.send("WITHIN is live ✅"));
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-/* ------------------------- Helpers ------------------------- */
+/* ---------------- Helpers ---------------- */
 
 function sanitizeHistory(history) {
   if (!Array.isArray(history)) return [];
   return history
-    .filter(m => m && (m.role === "user" || m.role === "assistant"))
-    .filter(m => typeof m.content === "string" && m.content.trim())
-    .slice(-10)
-    .map(m => ({ role: m.role, content: m.content.trim() }));
-}
-
-function clampSentences(text, max = 5) {
-  if (!text) return "";
-  const parts = text.trim().split(/(?<=[.!?])\s+/);
-  return parts.slice(0, max).join(" ").trim();
-}
-
-function enforceOneQuestion(text) {
-  if (!text) return "";
-  const matches = text.match(/\?/g);
-  if (!matches || matches.length <= 1) return text;
-
-  const firstIndex = text.indexOf("?");
-  return text.slice(0, firstIndex + 1).trim();
+    .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .map(m => ({ role: m.role, content: m.content.trim() }))
+    .filter(m => m.content && m.content !== "…")
+    .slice(-12);
 }
 
 function enforceSpacing(text) {
-  if (!text) return "";
-  let t = text.replace(/\n{3,}/g, "\n\n").trim();
+  if (!text || typeof text !== "string") return "";
+  let t = text.trim().replace(/\n{3,}/g, "\n\n");
   if (!t.includes("\n\n")) {
-    const parts = t.split(/(?<=[.!?])\s+/);
-    if (parts.length >= 3) {
-      t = parts.slice(0, 2).join(" ") + "\n\n" + parts.slice(2).join(" ");
-    }
+    const parts = t.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (parts.length >= 3) t = `${parts.slice(0, 2).join(" ")}\n\n${parts.slice(2).join(" ")}`.trim();
   }
-  return t.trim();
+  return t;
+}
+
+function clampSentences(text, max = 5) {
+  if (!text || typeof text !== "string") return "";
+  const parts = text.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  return parts.slice(0, max).join(" ").trim();
+}
+
+function enforceOneQuestionMark(text) {
+  if (!text || typeof text !== "string") return "";
+  const q = (text.match(/\?/g) || []).length;
+  if (q <= 1) return text.trim();
+  const first = text.indexOf("?");
+  return text.slice(0, first + 1).trim();
+}
+
+function ensureEndsWithQuestion(text) {
+  if (!text) return "I’m here.\n\nWhat set this off today?";
+  if (text.includes("?")) return text;
+  return (text.trim() + "\n\nWhat set this off today?").trim();
 }
 
 function warmFallback() {
-  return enforceOneQuestion(
-    "I’m still here. I didn’t get a clean response on my side, but I’ve got you.\n\nTell me again what’s happening right now?"
-  );
+  // No tech talk, stays in character
+  return "I’m here.\n\nSay that again for me?";
 }
 
-/* ------------------------- Main Chat ------------------------- */
+function tryParseJson(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// If the model ignored JSON mode and returned plain text,
+// we treat the whole thing as assistant_message.
+function normalizeModelOutput(raw) {
+  const parsed = tryParseJson(raw);
+  if (parsed && typeof parsed === "object") return parsed;
+
+  // Plain text fallback (still a real response)
+  return {
+    assistant_message: String(raw || "").trim()
+  };
+}
+
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function withRetry(fn, tries = 2) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const status = err?.status || err?.response?.status;
+      const retryable =
+        status === 429 ||
+        (status >= 500 && status <= 599) ||
+        err?.name === "AbortError";
+
+      if (!retryable || i === tries - 1) throw err;
+      await sleep(700 + i * 900);
+    }
+  }
+  throw lastErr;
+}
+
+/* ---------------- Chat ---------------- */
 
 app.post("/chat", async (req, res) => {
+  const started = Date.now();
+
   try {
     const session_id = String(req.body.session_id || "").trim();
     const user_text = String(req.body.user_text || "").trim();
     const history = sanitizeHistory(req.body.history);
-    const profile = req.body.profile && typeof req.body.profile === "object"
-      ? req.body.profile
-      : {};
 
-    if (!session_id || !user_text) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
-    }
+    if (!session_id) return res.status(400).json({ error: "session_id is required" });
+    if (!user_text) return res.status(400).json({ error: "user_text is required" });
+    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY missing" });
 
     const client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
@@ -86,117 +123,95 @@ app.post("/chat", async (req, res) => {
     const SYSTEM = `
 You are Lauren inside WITHIN.
 
-Lauren is a hybrid of:
-- A precise psychological strategist
-- An emotionally intelligent best friend
+Tone: a hybrid of (A) precise psychological strategist and (B) emotionally intelligent best friend.
+Warm, confident, clear. No therapy-speak. No long lectures.
 
-She is sharp, warm, grounded, and calm.
-She does not ramble.
-She does not overwhelm.
-She does not over-teach.
-She does not sound clinical.
+CRITICAL FLOW:
+Early stage (first 3–4 user turns): extract context only.
+- Ask ONE diagnostic question.
+- No advice yet. No reframes yet. No reflective questions yet.
+- Focus on: what happened, what triggered it, when it started, how often, what stakes.
 
-She uses psychology that is simple and easy to understand.
-She explains concepts in plain language.
-She introduces insight gradually instead of dumping knowledge.
+Later: gently name the pattern + simple psychology in plain language.
+Example: "When the brain senses uncertainty, it tries to regain control..."
 
-Conversation structure:
+Rules:
+- End with exactly ONE question.
+- Only ONE question mark total.
+- If user switches topics, respond only to the newest message.
+- No body-location questions.
+- No breathing prompts.
 
-EARLY STAGE (first 3–4 user turns):
-- Extract context.
-- Ask one diagnostic question only.
-- Focus on trigger, situation, frequency, stakes.
-- No solutions yet.
-- No reframes yet.
-- No deep reflection yet.
-- Keep responses short.
+Length:
+- 3–5 sentences max.
+- 2 short paragraphs max.
 
-MIDDLE STAGE:
-- Gently name patterns.
-- Example: "A pattern I’m noticing is..."
-- Briefly explain the psychology behind it in simple terms.
-- Example: "When the brain feels uncertainty, it tries to regain control..."
-
-SHIFT STAGE:
-- Offer one small shift.
-- Only one tool.
-- Keep it practical.
-
-ALWAYS:
-- End with exactly one thoughtful question.
-- Never ask more than one question.
-- Never ask the user to identify the root.
-- Do not ask where they feel it in their body.
-- Do not instruct breathing.
-- If the user switches topics, drop the previous thread immediately and respond only to the newest message.
-
-Response rules:
-- 3–5 sentences maximum.
-- 2 short paragraphs maximum.
-- Exactly one question mark.
-- No bullet points.
-- Clear, grounded, psychologically intelligent.
+Return JSON if possible with:
+assistant_message
+follow_up_questions
+chakra_map
+map
+show_assessment_button
+profile_update
+But if you cannot, return plain text. Keep it short.
 `;
 
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.35,
-      max_tokens: 260,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: SYSTEM },
-        ...history,
-        { role: "user", content: user_text }
-      ]
+    const completion = await withRetry(async () => {
+      return await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0.35,
+        max_tokens: 260,
+        // If supported by your installed OpenAI SDK, this helps.
+        // If not supported, normalizeModelOutput handles plain text.
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SYSTEM },
+          ...history,
+          { role: "user", content: user_text }
+        ]
+      });
+    }, 2);
+
+    const raw = completion.choices?.[0]?.message?.content || "";
+    const out = normalizeModelOutput(raw);
+
+    let assistant_message = typeof out.assistant_message === "string" ? out.assistant_message : "";
+    assistant_message = enforceSpacing(clampSentences(assistant_message, 5));
+    assistant_message = enforceOneQuestionMark(assistant_message);
+    assistant_message = ensureEndsWithQuestion(assistant_message);
+
+    const ms = Date.now() - started;
+    console.log("[WITHIN] OK", { ms, session_id, userTurns });
+
+    // Always return the structure your frontend expects
+    return res.json({
+      assistant_message,
+      follow_up_questions: [ "What set this off today?" ],
+      chakra_map: ["", "", ""],
+      map: {
+        sabotage_archetype: "None",
+        sabotage_confidence: 0,
+        perceived_threat: [],
+        limiting_belief: "",
+        identity_belief: "I am someone who is learning to understand myself",
+        protection_intent: "",
+        recommended_protocol: "Relief"
+      },
+      show_assessment_button: false,
+      profile_update: {}
     });
 
-    let raw = completion.choices?.[0]?.message?.content || "";
-    let parsed;
-
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return res.json({
-        assistant_message: warmFallback(),
-        follow_up_questions: ["What just triggered this today?"],
-        chakra_map: ["", "", ""],
-        map: {
-          sabotage_archetype: "None",
-          sabotage_confidence: 0,
-          perceived_threat: [],
-          limiting_belief: "",
-          identity_belief: "I am someone who is learning to understand myself",
-          protection_intent: "",
-          recommended_protocol: "Relief"
-        },
-        show_assessment_button: false,
-        profile_update: profile
-      });
-    }
-
-    if (!parsed.assistant_message) parsed.assistant_message = "";
-    if (!Array.isArray(parsed.follow_up_questions)) parsed.follow_up_questions = [];
-
-    parsed.assistant_message = clampSentences(parsed.assistant_message, 5);
-    parsed.assistant_message = enforceSpacing(parsed.assistant_message);
-    parsed.assistant_message = enforceOneQuestion(parsed.assistant_message);
-
-    if (!parsed.assistant_message.includes("?")) {
-      parsed.assistant_message += "\n\nWhat set this off today?";
-    }
-
-    parsed.follow_up_questions = [parsed.follow_up_questions[0] || "What set this off today?"];
-    parsed.chakra_map = ["", "", ""];
-    parsed.show_assessment_button = false;
-    parsed.profile_update = profile;
-
-    return res.json(parsed);
-
   } catch (err) {
-    console.error("Server error:", err.message);
+    const status = err?.status || err?.response?.status || 500;
+    console.error("[WITHIN] ERROR", {
+      status,
+      message: String(err?.message || err).slice(0, 400)
+    });
+
+    // IMPORTANT: return 200 so your frontend still renders a message
     return res.status(200).json({
       assistant_message: warmFallback(),
-      follow_up_questions: ["What just happened?"],
+      follow_up_questions: ["What set this off today?"],
       chakra_map: ["", "", ""],
       map: {
         sabotage_archetype: "None",
@@ -211,6 +226,10 @@ Response rules:
       profile_update: {}
     });
   }
+});
+
+app.post("/analyze", (req, res) => {
+  return res.status(410).json({ error: "Use POST /chat instead." });
 });
 
 const PORT = process.env.PORT || 3001;
