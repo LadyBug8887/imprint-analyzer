@@ -278,7 +278,12 @@ body{
 }
 
 /* Typing */
-.typing{ color:#111; font-size:15px; }
+.typing{
+  color:#111;
+  font-size:15px;
+  font-family:var(--ios-font);
+}
+
 
 
 /* Starter box */
@@ -432,13 +437,14 @@ function render(){
     const bubble=document.createElement("div");
     bubble.className="bubble "+msg.role;
 
-    if(msg.typing){
+if (msg.typing) {
   bubble.textContent = "Typing…";
   bubble.classList.add("typing");
 } else {
   bubble.textContent = msg.content;
   bubble.classList.remove("typing");
 }
+
 
 
     stack.appendChild(bubble);
