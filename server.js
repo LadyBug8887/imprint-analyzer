@@ -12,7 +12,15 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/", (req, res) => res.send("WITHIN is live ✅"));
 app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-/* ---------------- Helpers ---------------- */
+/* ---------- Helpers ---------- */
+
+function extractFirstJsonObject(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const candidate = text.slice(start, end + 1);
+  try { return JSON.parse(candidate); } catch { return null; }
+}
 
 function sanitizeHistory(history) {
   if (!Array.isArray(history)) return [];
@@ -54,43 +62,19 @@ function ensureEndsWithQuestion(text) {
 }
 
 function warmFallback() {
-  // No tech talk, stays in character
   return "I’m here.\n\nSay that again for me?";
 }
 
-function tryParseJson(raw) {
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-// If the model ignored JSON mode and returned plain text,
-// we treat the whole thing as assistant_message.
-function normalizeModelOutput(raw) {
-  const parsed = tryParseJson(raw);
-  if (parsed && typeof parsed === "object") return parsed;
-
-  // Plain text fallback (still a real response)
-  return {
-    assistant_message: String(raw || "").trim()
-  };
-}
-
-async function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function withRetry(fn, tries = 2) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
+    try { return await fn(); }
+    catch (err) {
       lastErr = err;
       const status = err?.status || err?.response?.status;
-      const retryable =
-        status === 429 ||
-        (status >= 500 && status <= 599) ||
-        err?.name === "AbortError";
-
+      const retryable = status === 429 || (status >= 500 && status <= 599) || err?.name === "AbortError";
       if (!retryable || i === tries - 1) throw err;
       await sleep(700 + i * 900);
     }
@@ -98,7 +82,7 @@ async function withRetry(fn, tries = 2) {
   throw lastErr;
 }
 
-/* ---------------- Chat ---------------- */
+/* ---------- Chat ---------- */
 
 app.post("/chat", async (req, res) => {
   const started = Date.now();
@@ -112,48 +96,38 @@ app.post("/chat", async (req, res) => {
     if (!user_text) return res.status(400).json({ error: "user_text is required" });
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: "OPENAI_API_KEY missing" });
 
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      timeout: 60000,
-      maxRetries: 0
-    });
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60000, maxRetries: 0 });
 
     const userTurns = history.filter(m => m.role === "user").length;
 
     const SYSTEM = `
 You are Lauren inside WITHIN.
 
-Tone: a hybrid of (A) precise psychological strategist and (B) emotionally intelligent best friend.
-Warm, confident, clear. No therapy-speak. No long lectures.
+Tone: hybrid of a precise psychological strategist and an emotionally intelligent best friend.
+Warm, confident, clear. No therapy-speak. No long explanations.
 
-CRITICAL FLOW:
+Flow:
 Early stage (first 3–4 user turns): extract context only.
-- Ask ONE diagnostic question.
-- No advice yet. No reframes yet. No reflective questions yet.
-- Focus on: what happened, what triggered it, when it started, how often, what stakes.
+Ask one diagnostic question. No advice yet. No reframes yet. No reflective questions yet.
+Focus on trigger, situation, frequency, stakes.
 
-Later: gently name the pattern + simple psychology in plain language.
-Example: "When the brain senses uncertainty, it tries to regain control..."
+Later: gently name patterns and explain psychology in plain language.
+Example: "When the brain senses uncertainty, it tries to regain control."
 
 Rules:
-- End with exactly ONE question.
-- Only ONE question mark total.
-- If user switches topics, respond only to the newest message.
-- No body-location questions.
-- No breathing prompts.
+End with exactly one thoughtful question.
+Only one question mark total.
+If the user switches topics, respond only to the newest message.
+No body-location questions.
+No breathing prompts.
 
 Length:
-- 3–5 sentences max.
-- 2 short paragraphs max.
+3–5 sentences max.
+2 short paragraphs max.
+No bullet points.
 
-Return JSON if possible with:
-assistant_message
-follow_up_questions
-chakra_map
-map
-show_assessment_button
-profile_update
-But if you cannot, return plain text. Keep it short.
+Return ONLY a JSON object with these keys:
+assistant_message, follow_up_questions, chakra_map, map, show_assessment_button, profile_update
 `;
 
     const completion = await withRetry(async () => {
@@ -161,10 +135,9 @@ But if you cannot, return plain text. Keep it short.
         model: "gpt-4o-mini",
         temperature: 0.35,
         max_tokens: 260,
-        // If supported by your installed OpenAI SDK, this helps.
-        // If not supported, normalizeModelOutput handles plain text.
-        response_format: { type: "json_object" },
         messages: [
+          // extra guard so the word json is always present in messages:
+          { role: "system", content: "Return valid json only. json." },
           { role: "system", content: SYSTEM },
           ...history,
           { role: "user", content: user_text }
@@ -173,9 +146,14 @@ But if you cannot, return plain text. Keep it short.
     }, 2);
 
     const raw = completion.choices?.[0]?.message?.content || "";
-    const out = normalizeModelOutput(raw);
 
-    let assistant_message = typeof out.assistant_message === "string" ? out.assistant_message : "";
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch { parsed = extractFirstJsonObject(raw); }
+
+    if (!parsed || typeof parsed !== "object") throw new Error("Model did not return JSON");
+
+    let assistant_message = typeof parsed.assistant_message === "string" ? parsed.assistant_message : "";
     assistant_message = enforceSpacing(clampSentences(assistant_message, 5));
     assistant_message = enforceOneQuestionMark(assistant_message);
     assistant_message = ensureEndsWithQuestion(assistant_message);
@@ -183,12 +161,13 @@ But if you cannot, return plain text. Keep it short.
     const ms = Date.now() - started;
     console.log("[WITHIN] OK", { ms, session_id, userTurns });
 
-    // Always return the structure your frontend expects
-    return res.json({
+    return res.status(200).json({
       assistant_message,
-      follow_up_questions: [ "What set this off today?" ],
-      chakra_map: ["", "", ""],
-      map: {
+      follow_up_questions: Array.isArray(parsed.follow_up_questions) && parsed.follow_up_questions.length
+        ? [String(parsed.follow_up_questions[0])]
+        : ["What set this off today?"],
+      chakra_map: Array.isArray(parsed.chakra_map) && parsed.chakra_map.length === 3 ? parsed.chakra_map : ["", "", ""],
+      map: (parsed.map && typeof parsed.map === "object") ? parsed.map : {
         sabotage_archetype: "None",
         sabotage_confidence: 0,
         perceived_threat: [],
@@ -198,17 +177,13 @@ But if you cannot, return plain text. Keep it short.
         recommended_protocol: "Relief"
       },
       show_assessment_button: false,
-      profile_update: {}
+      profile_update: (parsed.profile_update && typeof parsed.profile_update === "object") ? parsed.profile_update : {}
     });
 
   } catch (err) {
     const status = err?.status || err?.response?.status || 500;
-    console.error("[WITHIN] ERROR", {
-      status,
-      message: String(err?.message || err).slice(0, 400)
-    });
+    console.error("[WITHIN] ERROR", { status, message: String(err?.message || err).slice(0, 400) });
 
-    // IMPORTANT: return 200 so your frontend still renders a message
     return res.status(200).json({
       assistant_message: warmFallback(),
       follow_up_questions: ["What set this off today?"],
@@ -228,9 +203,7 @@ But if you cannot, return plain text. Keep it short.
   }
 });
 
-app.post("/analyze", (req, res) => {
-  return res.status(410).json({ error: "Use POST /chat instead." });
-});
+app.post("/analyze", (req, res) => res.status(410).json({ error: "Use POST /chat instead." }));
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log("Running on port", PORT));
