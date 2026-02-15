@@ -55,11 +55,28 @@ function enforceOneQuestionMark(text) {
   return text.slice(0, first + 1).trim();
 }
 
-function ensureEndsWithQuestion(text) {
-  if (!text) return "I’m here.\n\nWhat set this off today?";
-  if (text.includes("?")) return text;
-  return (text.trim() + "\n\nWhat set this off today?").trim();
+function ensureEndsWithQuestion(text, userTurns = 0) {
+  // Turn counting: userTurns = number of user messages already in history
+  // After receiving a message:
+  // - if this is their first message (userTurns === 1), ask their name
+  // - otherwise ask what's going on / how they're feeling
+
+  const firstTurnAskName =
+    "Hi, I’m Lauren.\n\nWhat should I call you?";
+
+  const laterTurnQuestion =
+    "What’s going on for you today?";
+
+  if (!text || typeof text !== "string") {
+    return userTurns <= 1 ? firstTurnAskName : laterTurnQuestion;
+  }
+
+  const t = text.trim();
+  if (t.includes("?")) return t;
+
+  return (t + "\n\n" + (userTurns <= 1 ? "What should I call you?" : "What’s going on for you today?")).trim();
 }
+
 
 function warmFallback() {
   return "I’m here.\n\nSay that again for me?";
@@ -162,7 +179,7 @@ Later Stage (after turn 3):
 - Keep it actionable and grounded.
 
 Output Constraints:
-- 3–5 sentences max.
+- 2–4 sentences max. (If greeting/first contact: 1–2 short sentences.)
 - 2 short paragraphs max.
 - No bullet points.
 - End with exactly ONE thoughtful question.
@@ -219,7 +236,7 @@ if (!parsed || typeof parsed !== "object") {
     let assistant_message = typeof parsed.assistant_message === "string" ? parsed.assistant_message : "";
     assistant_message = enforceSpacing(clampSentences(assistant_message, 5));
     assistant_message = enforceOneQuestionMark(assistant_message);
-    assistant_message = ensureEndsWithQuestion(assistant_message);
+    assistant_message = ensureEndsWithQuestion(assistant_message, userTurns);
 
     const ms = Date.now() - started;
     console.log("[WITHIN] OK", { ms, session_id, userTurns });
