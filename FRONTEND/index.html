@@ -204,18 +204,20 @@ body{
   display:flex;
   flex-direction:column;
   gap:4px;
+  max-width:78%;
 }
+
 .stack.user{
   align-items:flex-end;
-  max-width:100%;
 }
 
+.stack.assistant{
+  align-items:flex-start;
+}
 
-.stack.assistant{ align-items:flex-start; }
 
 .bubble{
   width:fit-content;
-  max-width:78%;
   padding:11px 14px;
   border-radius:20px;
   font-size:15px;
@@ -223,7 +225,6 @@ body{
   white-space:pre-wrap;
   word-break:break-word;
   text-align:left;
-  display:inline-block;
 }
 
 
