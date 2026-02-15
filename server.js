@@ -172,10 +172,21 @@ assistant_message, follow_up_questions, chakra_map, map, show_assessment_button,
     const raw = completion.choices?.[0]?.message?.content || "";
 
     let parsed;
-    try { parsed = JSON.parse(raw); }
-    catch { parsed = extractFirstJsonObject(raw); }
+try { parsed = JSON.parse(raw); }
+catch { parsed = extractFirstJsonObject(raw); }
 
-    if (!parsed || typeof parsed !== "object") throw new Error("Model did not return JSON");
+// If the model returns plain text, wrap it instead of failing
+if (!parsed || typeof parsed !== "object") {
+  parsed = {
+    assistant_message: String(raw || "").trim(),
+    follow_up_questions: [],
+    chakra_map: ["", "", ""],
+    map: {},
+    show_assessment_button: false,
+    profile_update: {}
+  };
+}
+
 
     let assistant_message = typeof parsed.assistant_message === "string" ? parsed.assistant_message : "";
     assistant_message = enforceSpacing(clampSentences(assistant_message, 5));
